@@ -776,16 +776,31 @@ class _ChatScreenState extends State<ChatScreen> {
               break;
             case 'error':
               throw Exception(payload['error'] ?? 'AI stream failed');
-            case 'done':
-            case 'stopped':
-              streamCompleted = true;
-              break;
-            case 'search_error':
-              debugPrint('Mafix search warning: ${payload['error']}');
-              break;
-          }
-        }
-      }
+             case 'done':
+             case 'stopped':
+               streamCompleted = true;
+              // Handle image generation response
+              if (payload['image_base64'] != null) {
+                receivedToken = true;
+                final imageB64 = payload['image_base64'].toString();
+                final answer = payload['answer']?.toString() ?? 'Here is the image you requested.';
+                final mimeType = payload['mime_type']?.toString() ?? payload['image_mime_type']?.toString() ?? 'image/png';
+                if (mounted && assistantIndex < _messages.length) {
+                  setState(() {
+                  _messages[assistantIndex] = _ChatMessage(
+             text: answer,
+          isUser: false,
+          imageBase64: imageB64,
+          imageMime: mimeType,
+        );
+      });
+      _scrollToBottom();
+    }
+  } else if (payload['answer'] != null && payload['answer'].toString().isNotEmpty) {
+    receivedToken = true;
+    updateAssistant(payload['answer'].toString());
+  }
+  break;
 
       await for (final bytes in response.stream.transform(utf8.decoder)) {
         buffer += bytes.replaceAll('\r\n', '\n');
