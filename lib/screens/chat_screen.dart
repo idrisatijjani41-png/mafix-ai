@@ -102,7 +102,6 @@ class _ChatScreenState extends State<ChatScreen> {
     return SharedPreferences.getInstance();
   }
 
-  // FIX: Scroll to the latest message after the frame is rendered.
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((Duration _) {
       if (!mounted || !_scrollController.hasClients) return;
@@ -152,7 +151,6 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
-    // Wait for an earlier save to finish.
     while (_isSaving) {
       await Future<void>.delayed(
         const Duration(milliseconds: 50),
@@ -466,7 +464,11 @@ class _ChatScreenState extends State<ChatScreen> {
         return;
       }
       final ext = image.name.toLowerCase().split('.').last;
-      final mime = ext == 'png' ? 'image/png' : ext == 'webp' ? 'image/webp' : 'image/jpeg';
+      final mime = ext == 'png'
+          ? 'image/png'
+          : ext == 'webp'
+              ? 'image/webp'
+              : 'image/jpeg';
       setState(() {
         _attachmentName = image.name;
         _attachmentMime = mime;
@@ -546,7 +548,14 @@ class _ChatScreenState extends State<ChatScreen> {
         return;
       }
       final ext = (file.extension ?? 'mp4').toLowerCase();
-      final mime = {'mp4':'video/mp4','mov':'video/quicktime','webm':'video/webm','avi':'video/x-msvideo','mkv':'video/x-matroska'}[ext] ?? 'video/mp4';
+      final mime = {
+            'mp4': 'video/mp4',
+            'mov': 'video/quicktime',
+            'webm': 'video/webm',
+            'avi': 'video/x-msvideo',
+            'mkv': 'video/x-matroska'
+          }[ext] ??
+          'video/mp4';
       setState(() {
         _attachmentName = file.name;
         _attachmentMime = mime;
@@ -565,23 +574,35 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_isLoading) return;
     final prompt = _controller.text.trim();
     if (prompt.isEmpty) {
-      _showSnack(generate ? 'Rubuta bayanin hoton da kake so.' : 'Bayyana yadda kake son a gyara hoton.');
+      _showSnack(generate
+          ? 'Rubuta bayanin hoton da kake so.'
+          : 'Bayyana yadda kake son a gyara hoton.');
       return;
     }
-    if (!generate && (_attachmentBase64 == null || !(_attachmentMime?.startsWith('image/') ?? false))) {
+    if (!generate &&
+        (_attachmentBase64 == null ||
+            !(_attachmentMime?.startsWith('image/') ?? false))) {
       _showSnack('Da farko zaɓi hoton da kake son gyarawa.');
       return;
     }
-    final endpoint = generate ? '/chat/image-generate' : '/chat/image-edit';
-    final url = Uri.parse('https://mafix-ai-backend.idrisatijjani9.workers.dev$endpoint');
+    final endpoint =
+        generate ? '/chat/image-generate' : '/chat/image-edit';
+    final url = Uri.parse(
+        'https://mafix-ai-backend.idrisatijjani9.workers.dev$endpoint');
     final assistantIndex = _messages.length + 1;
     String? imageB64 = _attachmentBase64;
     String? imageMime = _attachmentMime;
     if (!generate && imageB64 != null) {
       try {
         final decoded = img.decodeImage(base64Decode(imageB64));
-        if (decoded == null) throw Exception('Ba a iya karanta hoton ba.');
-        final resized = img.copyResize(decoded, width: decoded.width >= decoded.height ? 511 : null, height: decoded.height > decoded.width ? 511 : null);
+        if (decoded == null) {
+          throw Exception('Ba a iya karanta hoton ba.');
+        }
+        final resized = img.copyResize(
+          decoded,
+          width: decoded.width >= decoded.height ? 511 : null,
+          height: decoded.height > decoded.width ? 511 : null,
+        );
         imageB64 = base64Encode(img.encodePng(resized));
         imageMime = 'image/png';
       } catch (e) {
@@ -592,7 +613,12 @@ class _ChatScreenState extends State<ChatScreen> {
     final imageFileName = _attachmentName;
     setState(() {
       _messages.add(_ChatMessage(text: prompt, isUser: true));
-      _messages.add(_ChatMessage(text: generate ? 'Mafix AI is creating your image…' : 'Mafix AI is editing your image…', isUser: false));
+      _messages.add(_ChatMessage(
+        text: generate
+            ? 'Mafix AI is creating your image…'
+            : 'Mafix AI is editing your image…',
+        isUser: false,
+      ));
       _controller.clear();
       _isLoading = true;
       _generationStatus = generate ? 'creating_image' : 'editing_image';
@@ -600,31 +626,77 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     _scrollToBottom();
     try {
-      final response = await http.post(url,
-        headers: {'Content-Type':'application/json'},
-        body: jsonEncode({'prompt':prompt,'message':prompt,'image_base64':imageB64,'file_base64':imageB64,'mime_type':imageMime,'file_name':imageFileName,'mode':_selectedMode}),
-      ).timeout(const Duration(seconds: 180));
+      final response = await http
+          .post(
+            url,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'prompt': prompt,
+              'message': prompt,
+              'image_base64': imageB64,
+              'file_base64': imageB64,
+              'mime_type': imageMime,
+              'file_name': imageFileName,
+              'mode': _selectedMode
+            }),
+          )
+          .timeout(const Duration(seconds: 180));
       final dynamic data = jsonDecode(response.body);
-      if (response.statusCode != 200 || data is! Map) throw Exception(data is Map ? data['error'] ?? 'Image request failed' : 'HTTP ${response.statusCode}');
-      final reply = (data['reply'] ?? data['message'] ?? (generate ? 'Image created.' : 'Image edited.')).toString();
-      final out = data['image_base64'] ?? data['image'] ?? data['output_base64'];
-      final clean = out is String ? out.replaceFirst(RegExp(r'^data:image/[^;]+;base64,'), '') : null;
+      if (response.statusCode != 200 || data is! Map) {
+        throw Exception(data is Map
+            ? data['error'] ?? 'Image request failed'
+            : 'HTTP ${response.statusCode}');
+      }
+      final reply = (data['reply'] ??
+              data['message'] ??
+              (generate ? 'Image created.' : 'Image edited.'))
+          .toString();
+      final out =
+          data['image_base64'] ?? data['image'] ?? data['output_base64'];
+      final clean = out is String
+          ? out.replaceFirst(
+              RegExp(r'^data:image/[^;]+;base64,'), '')
+          : null;
       if (!mounted) return;
       setState(() {
-        _messages[assistantIndex] = _ChatMessage(text: reply, isUser: false, imageBase64: clean,
-          imageMime: (data['image_mime_type'] ?? data['mime_type'] ?? 'image/png').toString());
+        _messages[assistantIndex] = _ChatMessage(
+          text: reply,
+          isUser: false,
+          imageBase64: clean,
+          imageMime:
+              (data['image_mime_type'] ?? data['mime_type'] ?? 'image/png')
+                  .toString(),
+        );
       });
       await _saveConversation();
     } catch (e) {
-      if (mounted) setState(() => _messages[assistantIndex] = _ChatMessage(text: 'An samu matsala wajen ${generate ? 'ƙirƙirar' : 'gyaran'} hoto: $e', isUser:false, isError:true));
+      if (mounted) {
+        setState(() {
+          _messages[assistantIndex] = _ChatMessage(
+            text:
+                'An samu matsala wajen ${generate ? 'ƙirƙirar' : 'gyaran'} hoto: $e',
+            isUser: false,
+            isError: true,
+          );
+        });
+      }
     } finally {
-      if (mounted) setState(() { _isLoading = false; _generationStatus = 'thinking'; });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _generationStatus = 'thinking';
+        });
+      }
     }
   }
 
   void _clearAttachmentFields() {
-    _attachmentName = null; _attachmentMime = null; _attachmentBase64 = null;
-    _attachmentText = null; _attachmentPreviewBytes = null; _attachmentIsVideo = false;
+    _attachmentName = null;
+    _attachmentMime = null;
+    _attachmentBase64 = null;
+    _attachmentText = null;
+    _attachmentPreviewBytes = null;
+    _attachmentIsVideo = false;
     _attachmentAction = 'analyze';
   }
 
@@ -634,29 +706,50 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  Future<void> _sendAttachmentMessage(String prompt, int assistantIndex, String fileName, String? mimeType, String? fileBase64, String? fileText) async {
-    final uri = Uri.parse('https://mafix-ai-backend.idrisatijjani9.workers.dev${mimeType?.startsWith('video/') == true ? '/chat/video' : '/chat/attachment'}');
-    final response = await http.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'message': prompt,
-        'file_name': fileName,
-        'mime_type': mimeType,
-        'file_base64': fileBase64,
-        'file_text': fileText,
-        'mode': _selectedMode,
-        'prompt': prompt,
-      }),
-    ).timeout(const Duration(seconds: 90));
+  Future<void> _sendAttachmentMessage(
+    String prompt,
+    int assistantIndex,
+    String fileName,
+    String? mimeType,
+    String? fileBase64,
+    String? fileText,
+  ) async {
+    final uri = Uri.parse(
+      'https://mafix-ai-backend.idrisatijjani9.workers.dev'
+      '${mimeType?.startsWith('video/') == true ? '/chat/video' : '/chat/attachment'}',
+    );
+    final response = await http
+        .post(
+          uri,
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'message': prompt,
+            'file_name': fileName,
+            'mime_type': mimeType,
+            'file_base64': fileBase64,
+            'file_text': fileText,
+            'mode': _selectedMode,
+            'prompt': prompt,
+          }),
+        )
+        .timeout(const Duration(seconds: 90));
     dynamic data;
-    try { data = jsonDecode(response.body); } catch (_) {}
-    if (response.statusCode != 200 || data is! Map || data['reply'] == null) {
-      throw Exception(data is Map ? data['error'] ?? 'Attachment analysis failed' : 'HTTP ${response.statusCode}');
+    try {
+      data = jsonDecode(response.body);
+    } catch (_) {}
+    if (response.statusCode != 200 ||
+        data is! Map ||
+        data['reply'] == null) {
+      throw Exception(data is Map
+          ? data['error'] ?? 'Attachment analysis failed'
+          : 'HTTP ${response.statusCode}');
     }
     if (!mounted) return;
     setState(() {
-      _messages[assistantIndex] = _ChatMessage(text: data['reply'].toString(), isUser: false);
+      _messages[assistantIndex] = _ChatMessage(
+        text: data['reply'].toString(),
+        isUser: false,
+      );
     });
     await _saveConversation();
   }
@@ -669,14 +762,20 @@ class _ChatScreenState extends State<ChatScreen> {
     final attachmentBase64 = _attachmentBase64;
     final attachmentText = _attachmentText;
     final attachmentAction = _attachmentAction;
-    final prompt = text.isEmpty ? 'Please analyze the attached file.' : text;
+    final prompt =
+        text.isEmpty ? 'Please analyze the attached file.' : text;
 
     final previousMessages = List<_ChatMessage>.from(_messages);
     final requestId = DateTime.now().microsecondsSinceEpoch.toString();
     final assistantIndex = _messages.length + 1;
 
     setState(() {
-      _messages.add(_ChatMessage(text: attachmentName == null ? prompt : '$prompt\n\n📎 $attachmentName', isUser: true));
+      _messages.add(_ChatMessage(
+        text: attachmentName == null
+            ? prompt
+            : '$prompt\n\n📎 $attachmentName',
+        isUser: true,
+      ));
       _messages.add(const _ChatMessage(text: '', isUser: false));
       _controller.clear();
       _clearAttachmentFields();
@@ -706,11 +805,27 @@ class _ChatScreenState extends State<ChatScreen> {
 
     try {
       if (attachmentAction == 'video' && attachmentName != null) {
-        await _sendAttachmentMessage(prompt.isEmpty ? 'Summarize this video and let me ask questions about its contents and timestamps.' : prompt, assistantIndex, attachmentName, attachmentMime, attachmentBase64, attachmentText);
+        await _sendAttachmentMessage(
+          prompt.isEmpty
+              ? 'Summarize this video and let me ask questions about its contents and timestamps.'
+              : prompt,
+          assistantIndex,
+          attachmentName,
+          attachmentMime,
+          attachmentBase64,
+          attachmentText,
+        );
         return;
       }
       if (attachmentName != null) {
-        await _sendAttachmentMessage(prompt, assistantIndex, attachmentName, attachmentMime, attachmentBase64, attachmentText);
+        await _sendAttachmentMessage(
+          prompt,
+          assistantIndex,
+          attachmentName,
+          attachmentMime,
+          attachmentBase64,
+          attachmentText,
+        );
         return;
       }
       final request = http.Request('POST', Uri.parse(_streamUrl))
@@ -733,12 +848,14 @@ class _ChatScreenState extends State<ChatScreen> {
         });
 
       final response = await client.send(request).timeout(
-        const Duration(seconds: 75),
-      );
+            const Duration(seconds: 75),
+          );
       if (response.statusCode != 200) {
         final errorBody = await response.stream.bytesToString();
         dynamic decoded;
-        try { decoded = jsonDecode(errorBody); } catch (_) {}
+        try {
+          decoded = jsonDecode(errorBody);
+        } catch (_) {}
         throw Exception(decoded is Map
             ? decoded['error'] ?? 'HTTP ${response.statusCode}'
             : 'HTTP ${response.statusCode}');
@@ -763,10 +880,13 @@ class _ChatScreenState extends State<ChatScreen> {
           switch (payload['type']) {
             case 'status':
               if (mounted) {
-                setState(() => _generationStatus =
-                    payload['status']?.toString() ?? 'thinking');
+                setState(() {
+                  _generationStatus =
+                      payload['status']?.toString() ?? 'thinking';
+                });
               }
               break;
+
             case 'token':
               final token = payload['text']?.toString() ?? '';
               if (token.isNotEmpty) {
@@ -774,33 +894,44 @@ class _ChatScreenState extends State<ChatScreen> {
                 updateAssistant(token);
               }
               break;
+
             case 'error':
               throw Exception(payload['error'] ?? 'AI stream failed');
-             case 'done':
-             case 'stopped':
-               streamCompleted = true;
-              // Handle image generation response
+
+            case 'done':
+            case 'stopped':
+              streamCompleted = true;
+
+              // Handle an image returned by the streaming endpoint.
               if (payload['image_base64'] != null) {
                 receivedToken = true;
                 final imageB64 = payload['image_base64'].toString();
-                final answer = payload['answer']?.toString() ?? 'Here is the image you requested.';
-                final mimeType = payload['mime_type']?.toString() ?? payload['image_mime_type']?.toString() ?? 'image/png';
+                final answer = payload['answer']?.toString() ??
+                    'Here is the image you requested.';
+                final mimeType = payload['mime_type']?.toString() ??
+                    payload['image_mime_type']?.toString() ??
+                    'image/png';
+
                 if (mounted && assistantIndex < _messages.length) {
                   setState(() {
-                  _messages[assistantIndex] = _ChatMessage(
-             text: answer,
-          isUser: false,
-          imageBase64: imageB64,
-          imageMime: mimeType,
-        );
-      });
-      _scrollToBottom();
-    }
-  } else if (payload['answer'] != null && payload['answer'].toString().isNotEmpty) {
-    receivedToken = true;
-    updateAssistant(payload['answer'].toString());
-  }
-  break;
+                    _messages[assistantIndex] = _ChatMessage(
+                      text: answer,
+                      isUser: false,
+                      imageBase64: imageB64,
+                      imageMime: mimeType,
+                    );
+                  });
+                  _scrollToBottom();
+                }
+              } else if (payload['answer'] != null &&
+                  payload['answer'].toString().isNotEmpty) {
+                receivedToken = true;
+                updateAssistant(payload['answer'].toString());
+              }
+              break;
+          }
+        }
+      }
 
       await for (final bytes in response.stream.transform(utf8.decoder)) {
         buffer += bytes.replaceAll('\r\n', '\n');
@@ -811,8 +942,11 @@ class _ChatScreenState extends State<ChatScreen> {
           processSseEvent(event);
         }
       }
+
       // Some servers close the stream without a final blank-line delimiter.
-      if (buffer.trim().isNotEmpty) processSseEvent(buffer);
+      if (buffer.trim().isNotEmpty) {
+        processSseEvent(buffer);
+      }
 
       if (!receivedToken) {
         throw Exception(streamCompleted
@@ -850,9 +984,19 @@ class _ChatScreenState extends State<ChatScreen> {
 
   String _normalizeMode(String value) {
     final mode = value.toLowerCase().trim();
-    if (mode == 'deep research' || mode == 'deep_research') return 'deep research';
+    if (mode == 'deep research' || mode == 'deep_research') {
+      return 'deep research';
+    }
     if (mode == 'web search') return 'research';
-    if (['thinking', 'analyze', 'research', 'study', 'coding'].contains(mode)) return mode;
+    if ([
+      'thinking',
+      'analyze',
+      'research',
+      'study',
+      'coding'
+    ].contains(mode)) {
+      return mode;
+    }
     return 'instant';
   }
 
@@ -861,12 +1005,20 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       final bytes = base64Decode(message.imageBase64!);
       final mime = (message.imageMime ?? 'image/png').toLowerCase();
-      final ext = mime.contains('jpeg') || mime.contains('jpg') ? 'jpg' : mime.contains('webp') ? 'webp' : 'png';
+      final ext = mime.contains('jpeg') || mime.contains('jpg')
+          ? 'jpg'
+          : mime.contains('webp')
+              ? 'webp'
+              : 'png';
       await FileSaver.instance.saveFile(
         name: 'mafix_ai_${DateTime.now().millisecondsSinceEpoch}',
         bytes: bytes,
         fileExtension: ext,
-        mimeType: mime.contains('jpeg') ? MimeType.jpeg : mime.contains('webp') ? MimeType.webp : MimeType.png,
+        mimeType: mime.contains('jpeg')
+            ? MimeType.jpeg
+            : mime.contains('webp')
+                ? MimeType.webp
+                : MimeType.png,
       );
       _showSnack('An adana hoton cikin na’urar ka.');
     } catch (e) {
@@ -892,13 +1044,20 @@ class _ChatScreenState extends State<ChatScreen> {
 
   String _statusLabel(String status) {
     switch (status) {
-      case 'creating_image': return 'Mafix AI is creating an image…';
-      case 'editing_image': return 'Mafix AI is editing your image…';
-      case 'searching': return 'Searching the web...';
-      case 'analyzing': return 'Analyzing information...';
-      case 'preparing_answer': return 'Preparing answer...';
-      case 'stopped': return 'Generation stopped';
-      default: return 'Mafix AI is thinking...';
+      case 'creating_image':
+        return 'Mafix AI is creating an image…';
+      case 'editing_image':
+        return 'Mafix AI is editing your image…';
+      case 'searching':
+        return 'Searching the web...';
+      case 'analyzing':
+        return 'Analyzing information...';
+      case 'preparing_answer':
+        return 'Preparing answer...';
+      case 'stopped':
+        return 'Generation stopped';
+      default:
+        return 'Mafix AI is thinking...';
     }
   }
 
@@ -1333,7 +1492,17 @@ class _ChatScreenState extends State<ChatScreen> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                if (message.imageBase64 != null) Padding(padding: const EdgeInsets.only(bottom: 8), child: ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.memory(base64Decode(message.imageBase64!), fit: BoxFit.contain))),
+                                if (message.imageBase64 != null)
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 8),
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(12),
+                                      child: Image.memory(
+                                        base64Decode(message.imageBase64!),
+                                        fit: BoxFit.contain,
+                                      ),
+                                    ),
+                                  ),
                                 SelectableText(
                                   message.text,
                                   style: TextStyle(
@@ -1343,7 +1512,9 @@ class _ChatScreenState extends State<ChatScreen> {
                                         : Colors.white,
                                   ),
                                 ),
-                                if (!message.isUser && !message.isError && message.text.isNotEmpty)
+                                if (!message.isUser &&
+                                    !message.isError &&
+                                    message.text.isNotEmpty)
                                   Padding(
                                     padding: const EdgeInsets.only(top: 6),
                                     child: Row(
@@ -1352,15 +1523,37 @@ class _ChatScreenState extends State<ChatScreen> {
                                         IconButton(
                                           visualDensity: VisualDensity.compact,
                                           tooltip: 'Copy answer',
-                                          onPressed: () => _copyMessage(message.text),
-                                          icon: const Icon(Icons.copy_rounded, size: 17, color: Colors.white60),
+                                          onPressed: () =>
+                                              _copyMessage(message.text),
+                                          icon: const Icon(
+                                            Icons.copy_rounded,
+                                            size: 17,
+                                            color: Colors.white60,
+                                          ),
                                         ),
-                                        if (message.imageBase64 != null) IconButton(visualDensity: VisualDensity.compact, tooltip: 'Download image', onPressed: () => _downloadGeneratedImage(message), icon: const Icon(Icons.download_rounded, size: 19, color: Colors.white60)),
+                                        if (message.imageBase64 != null)
+                                          IconButton(
+                                            visualDensity:
+                                                VisualDensity.compact,
+                                            tooltip: 'Download image',
+                                            onPressed: () =>
+                                                _downloadGeneratedImage(message),
+                                            icon: const Icon(
+                                              Icons.download_rounded,
+                                              size: 19,
+                                              color: Colors.white60,
+                                            ),
+                                          ),
                                         IconButton(
                                           visualDensity: VisualDensity.compact,
                                           tooltip: 'Read aloud',
-                                          onPressed: () => _readMessageAloud(message.text),
-                                          icon: const Icon(Icons.volume_up_outlined, size: 19, color: Colors.white60),
+                                          onPressed: () =>
+                                              _readMessageAloud(message.text),
+                                          icon: const Icon(
+                                            Icons.volume_up_outlined,
+                                            size: 19,
+                                            color: Colors.white60,
+                                          ),
                                         ),
                                       ],
                                     ),
@@ -1375,17 +1568,55 @@ class _ChatScreenState extends State<ChatScreen> {
             if (_attachmentName != null)
               Padding(
                 padding: const EdgeInsets.fromLTRB(14, 4, 14, 6),
-                child: Row(children: [
-                  if (_attachmentPreviewBytes != null)
-                    ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.memory(_attachmentPreviewBytes!, width: 64, height: 54, fit: BoxFit.cover))
-                  else Icon(_attachmentIsVideo ? Icons.video_file_outlined : Icons.attach_file, color: const Color(0xFF39DDFF), size: 28),
-                  const SizedBox(width: 10),
-                  Expanded(child: Text(_attachmentName!, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white70))),
-                  if (!_attachmentIsVideo && (_attachmentMime?.startsWith('image/') ?? false)) ...[
-                    IconButton(tooltip: 'Edit image', onPressed: () => _runImageAction(generate: false), icon: const Icon(Icons.auto_fix_high, color: Color(0xFF39DDFF))),
+                child: Row(
+                  children: [
+                    if (_attachmentPreviewBytes != null)
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.memory(
+                          _attachmentPreviewBytes!,
+                          width: 64,
+                          height: 54,
+                          fit: BoxFit.cover,
+                        ),
+                      )
+                    else
+                      Icon(
+                        _attachmentIsVideo
+                            ? Icons.video_file_outlined
+                            : Icons.attach_file,
+                        color: const Color(0xFF39DDFF),
+                        size: 28,
+                      ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        _attachmentName!,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                    ),
+                    if (!_attachmentIsVideo &&
+                        (_attachmentMime?.startsWith('image/') ?? false))
+                      IconButton(
+                        tooltip: 'Edit image',
+                        onPressed: () => _runImageAction(generate: false),
+                        icon: const Icon(
+                          Icons.auto_fix_high,
+                          color: Color(0xFF39DDFF),
+                        ),
+                      ),
+                    IconButton(
+                      onPressed: _clearAttachment,
+                      icon: const Icon(
+                        Icons.close,
+                        color: Colors.white70,
+                        size: 18,
+                      ),
+                    ),
                   ],
-                  IconButton(onPressed: _clearAttachment, icon: const Icon(Icons.close, color: Colors.white70, size: 18)),
-                ]),
+                ),
               ),
             Container(
               padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
@@ -1404,39 +1635,79 @@ class _ChatScreenState extends State<ChatScreen> {
                       context: context,
                       backgroundColor: const Color(0xFF171D42),
                       builder: (sheetContext) => SafeArea(
-                        child: Wrap(children: [
-                          ListTile(
-                            leading: const Icon(Icons.photo_camera_outlined, color: Color(0xFF39DDFF)),
-                            title: const Text('Take a photo'),
-                            onTap: () { Navigator.pop(sheetContext); _pickImage(ImageSource.camera); },
-                          ),
-                          ListTile(
-                            leading: const Icon(Icons.image_outlined, color: Color(0xFF39DDFF)),
-                            title: const Text('Choose image'),
-                            onTap: () { Navigator.pop(sheetContext); _pickImage(ImageSource.gallery); },
-                          ),
-                          ListTile(
-                            leading: const Icon(Icons.video_library_outlined, color: Color(0xFF39DDFF)),
-                            title: const Text('Choose video'),
-                            subtitle: const Text('Analyze, summarize, and ask about timestamps (max 16 MB)'),
-                            onTap: () { Navigator.pop(sheetContext); _pickVideo(); },
-                          ),
-                          ListTile(
-                            leading: const Icon(Icons.auto_awesome, color: Color(0xFF39DDFF)),
-                            title: const Text('Generate a new image'),
-                            subtitle: const Text('Describe the image in the message box first'),
-                            onTap: () { Navigator.pop(sheetContext); _runImageAction(generate: true); },
-                          ),
-                          ListTile(
-                            leading: const Icon(Icons.picture_as_pdf_outlined, color: Color(0xFF39DDFF)),
-                            title: const Text('Choose PDF or text file'),
-                            subtitle: const Text('PDF, TXT, MD, CSV'),
-                            onTap: () { Navigator.pop(sheetContext); _pickDocument(); },
-                          ),
-                        ]),
+                        child: Wrap(
+                          children: [
+                            ListTile(
+                              leading: const Icon(
+                                Icons.photo_camera_outlined,
+                                color: Color(0xFF39DDFF),
+                              ),
+                              title: const Text('Take a photo'),
+                              onTap: () {
+                                Navigator.pop(sheetContext);
+                                _pickImage(ImageSource.camera);
+                              },
+                            ),
+                            ListTile(
+                              leading: const Icon(
+                                Icons.image_outlined,
+                                color: Color(0xFF39DDFF),
+                              ),
+                              title: const Text('Choose image'),
+                              onTap: () {
+                                Navigator.pop(sheetContext);
+                                _pickImage(ImageSource.gallery);
+                              },
+                            ),
+                            ListTile(
+                              leading: const Icon(
+                                Icons.video_library_outlined,
+                                color: Color(0xFF39DDFF),
+                              ),
+                              title: const Text('Choose video'),
+                              subtitle: const Text(
+                                'Analyze, summarize, and ask about timestamps (max 16 MB)',
+                              ),
+                              onTap: () {
+                                Navigator.pop(sheetContext);
+                                _pickVideo();
+                              },
+                            ),
+                            ListTile(
+                              leading: const Icon(
+                                Icons.auto_awesome,
+                                color: Color(0xFF39DDFF),
+                              ),
+                              title: const Text('Generate a new image'),
+                              subtitle: const Text(
+                                'Describe the image in the message box first',
+                              ),
+                              onTap: () {
+                                Navigator.pop(sheetContext);
+                                _runImageAction(generate: true);
+                              },
+                            ),
+                            ListTile(
+                              leading: const Icon(
+                                Icons.picture_as_pdf_outlined,
+                                color: Color(0xFF39DDFF),
+                              ),
+                              title: const Text('Choose PDF or text file'),
+                              subtitle: const Text('PDF, TXT, MD, CSV'),
+                              onTap: () {
+                                Navigator.pop(sheetContext);
+                                _pickDocument();
+                              },
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                    icon: const Icon(Icons.add_circle_outline, color: Color(0xFF39DDFF), size: 27),
+                    icon: const Icon(
+                      Icons.add_circle_outline,
+                      color: Color(0xFF39DDFF),
+                      size: 27,
+                    ),
                   ),
                   Expanded(
                     child: TextField(
@@ -1462,21 +1733,32 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   const SizedBox(width: 2),
                   IconButton(
-                    tooltip: _isListening ? 'Stop speech-to-text' : 'Speech-to-text',
+                    tooltip: _isListening
+                        ? 'Stop speech-to-text'
+                        : 'Speech-to-text',
                     onPressed: _isLoading ? null : _toggleSpeechToText,
                     icon: Icon(
-                      _isListening ? Icons.stop_circle : Icons.mic_none_rounded,
-                      color: _isListening ? Colors.redAccent : const Color(0xFF39DDFF),
+                      _isListening
+                          ? Icons.stop_circle
+                          : Icons.mic_none_rounded,
+                      color: _isListening
+                          ? Colors.redAccent
+                          : const Color(0xFF39DDFF),
                     ),
                   ),
                   IconButton(
                     tooltip: 'Live voice conversation',
                     onPressed: _isLoading ? null : _openVoiceConversation,
-                    icon: const Icon(Icons.graphic_eq_rounded, color: Color(0xFF39DDFF)),
+                    icon: const Icon(
+                      Icons.graphic_eq_rounded,
+                      color: Color(0xFF39DDFF),
+                    ),
                   ),
                   IconButton.filled(
                     tooltip: 'Send message',
-                    onPressed: _isLoading || (_controller.text.trim().isEmpty && _attachmentName == null)
+                    onPressed: _isLoading ||
+                            (_controller.text.trim().isEmpty &&
+                                _attachmentName == null)
                         ? null
                         : _sendMessage,
                     style: IconButton.styleFrom(
