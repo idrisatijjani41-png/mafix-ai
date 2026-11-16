@@ -36,6 +36,37 @@ jobs:
       - name: Generate Android project files
         run: flutter create --platforms=android .
 
+      - name: Set Android Compile SDK 36
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          file = Path("android/app/build.gradle.kts")
+
+          if not file.exists():
+              raise SystemExit("ERROR: build.gradle.kts not found")
+
+          content = file.read_text()
+
+          updated, count = re.subn(
+              r'(?m)^(\s*)compileSdk\s*=.*$',
+              r'\g<1>compileSdk = 36',
+              content,
+              count=1
+          )
+
+          if count == 0:
+              raise SystemExit("ERROR: compileSdk setting not found")
+
+          file.write_text(updated)
+
+          if not re.search(r'(?m)^\s*compileSdk\s*=\s*36\s*$', updated):
+              raise SystemExit("ERROR: compileSdk 36 verification failed")
+
+          print("SUCCESS: compileSdk is set to 36")
+          PY
+
       - name: Add Android internet permission
         run: |
           python3 - <<'PY'
