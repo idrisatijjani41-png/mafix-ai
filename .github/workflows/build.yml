@@ -37,6 +37,7 @@ jobs:
         run: flutter create --platforms=android .
 
       - name: Configure Android Compile SDK 36
+        shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -51,7 +52,7 @@ jobs:
           if not root_file.exists():
               raise SystemExit("ERROR: Root Gradle file not found")
 
-          # Set application compileSdk to 36
+          # Set app Compile SDK to 36
           app = app_file.read_text()
 
           app, count = re.subn(
@@ -62,61 +63,89 @@ jobs:
           )
 
           if count == 0:
-              raise SystemExit("ERROR: App compileSdk setting not found")
+              raise SystemExit(
+                  "ERROR: Could not find compileSdk in app Gradle file"
+              )
 
           app_file.write_text(app)
 
-          # Configure all Android application and library modules
+          # Remove previous SDK override blocks
           root = root_file.read_text()
 
-          config = """
-          subprojects {
-              plugins.withId("com.android.application") {
-                  extensions.configure<com.android.build.api.dsl.ApplicationExtension> {
-                      compileSdk = 36
-                  }
-              }
+          root = re.sub(
+              r'(?s)\n// Configure all Android modules to use Compile SDK 36.*',
+              '',
+              root
+          )
 
-              plugins.withId("com.android.library") {
-                  extensions.configure<com.android.build.api.dsl.LibraryExtension> {
-                      compileSdk = 36
+          # Apply SDK 36 after every Android module has been evaluated.
+          # Reflection avoids requiring AGP classes on the root script classpath.
+          config = """
+
+          // Force every Android module to use Compile SDK 36
+          gradle.projectsEvaluated {
+              rootProject.allprojects { project ->
+                  def androidExtension = project.extensions.findByName("android")
+
+                  if (androidExtension != null) {
+                      def compileSdkSetter = androidExtension.class.methods.find {
+                          it.name == "setCompileSdk" &&
+                          it.parameterCount == 1 &&
+                          (it.parameterTypes[0] == Integer.TYPE ||
+                           it.parameterTypes[0] == Integer.class)
+                      }
+
+                      if (compileSdkSetter == null) {
+                          throw new GradleException(
+                              "Cannot set Compile SDK 36 for " + project.path
+                          )
+                      }
+
+                      compileSdkSetter.invoke(androidExtension, 36)
+
+                      println(
+                          "MAFIX SDK FIX: " + project.path +
+                          " configured with Compile SDK 36"
+                      )
                   }
               }
           }
           """
 
-          if "Configure all Android modules to use Compile SDK 36" not in root:
-              root += """
-          
-          // Configure all Android modules to use Compile SDK 36
-          """ + config
-
+          root += config
           root_file.write_text(root)
 
-          print("SUCCESS: App compileSdk set to 36")
-          print("SUCCESS: Android library modules configured for SDK 36")
+          print("SUCCESS: App Compile SDK set to 36")
+          print("SUCCESS: Global Android module SDK override added")
           PY
 
-      - name: Verify Android Compile SDK
+      - name: Verify Android SDK configuration
         run: |
-          echo "Checking Android SDK configuration..."
+          echo "Checking app Compile SDK..."
           grep -n "compileSdk" android/app/build.gradle.kts
-          grep -n "compileSdk = 36" android/build.gradle.kts
 
-      - name: Add Android internet permission
+          echo "Checking global SDK override..."
+          grep -n "Force every Android module" android/build.gradle.kts
+
+      - name: Add Android Internet permission
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import re
 
-          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          manifest = Path(
+              "android/app/src/main/AndroidManifest.xml"
+          )
 
           if not manifest.exists():
               raise SystemExit("ERROR: AndroidManifest.xml not found")
 
           content = manifest.read_text()
 
-          permission = '<uses-permission android:name="android.permission.INTERNET"/>'
+          permission = (
+              '<uses-permission '
+              'android:name="android.permission.INTERNET"/>'
+          )
 
           if "android.permission.INTERNET" not in content:
               content = re.sub(
@@ -127,10 +156,11 @@ jobs:
               )
 
           manifest.write_text(content)
-          print("SUCCESS: Internet permission is present.")
+
+          print("SUCCESS: Internet permission configured")
           PY
 
-      - name: Get dependencies
+      - name: Get Flutter dependencies
         run: flutter pub get
 
       - name: Build release APK
@@ -147,13 +177,15 @@ jobs:
 
       - name: Verify APK
         run: |
-          if [ ! -f build/app/outputs/flutter-apk/app-release.apk ]; then
+          APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
+
+          if [ ! -f "$APK_PATH" ]; then
             echo "ERROR: APK was not generated."
             exit 1
           fi
 
           echo "SUCCESS: Mafix AI APK generated."
-          ls -lh build/app/outputs/flutter-apk/app-release.apk
+          ls -lh "$APK_PATH"
 
       - name: Upload Mafix AI APK
         uses: actions/upload-artifact@v4
