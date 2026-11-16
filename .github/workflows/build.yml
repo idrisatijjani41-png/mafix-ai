@@ -9,6 +9,11 @@ on:
 jobs:
   build-android:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
     steps:
       - name: Checkout repository
@@ -26,14 +31,16 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Create Android platform
-        run: flutter create --platforms=android .
-
       - name: Install Android SDK 36
-        env:
-          ANDROID_HOME: /usr/local/lib/android/sdk
+        shell: bash
         run: |
+          set -e
           SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort | tail -n 1)
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager not found"
+            exit 1
+          fi
 
           yes | "$SDKMANAGER" --licenses
 
@@ -51,11 +58,14 @@ jobs:
           gradle = Path("android/app/build.gradle.kts")
           content = gradle.read_text()
 
-          content = re.sub(
+          content, count = re.subn(
               r'(?m)^(\s*compileSdk\s*=\s*).+$',
               r'\g<1>36',
               content
           )
+
+          if count == 0:
+              raise SystemExit("compileSdk declaration not found")
 
           gradle.write_text(content)
           PY
@@ -73,7 +83,10 @@ jobs:
               ".pub-cache/hosted/pub.dev/file_picker-*/android/build.gradle"
           )
 
+          found = False
+
           for path in paths:
+              found = True
               content = path.read_text()
 
               content = re.sub(
@@ -89,6 +102,9 @@ jobs:
               )
 
               path.write_text(content)
+
+          if not found:
+              raise SystemExit("file_picker Android Gradle file not found")
           PY
 
       - name: Add Internet permission
@@ -103,15 +119,20 @@ jobs:
       - name: Verify Android SDK
         run: |
           flutter doctor -v
-          sdkmanager --list
+          test -d "$ANDROID_HOME/platforms/android-36"
+          test -d "$ANDROID_HOME/build-tools/36.0.0"
 
       - name: Build Mafix AI APK
+        env:
+          MAFIX_LIVE_TOKEN: ${{ secrets.LIVE_AUTH_TOKEN }}
         run: |
           flutter build apk --release \
-            --dart-define=MAFIX_LIVE_TOKEN="${{ secrets.LIVE_AUTH_TOKEN }}"
+            --dart-define=MAFIX_LIVE_TOKEN="$MAFIX_LIVE_TOKEN"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Mafix-AI-Android-APK
           path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
