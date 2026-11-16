@@ -36,7 +36,7 @@ jobs:
       - name: Generate Android project files
         run: flutter create --platforms=android .
 
-      - name: Configure Android Compile SDK 36
+      - name: Configure Android SDK 36
         shell: bash
         run: |
           python3 - <<'PY'
@@ -52,7 +52,7 @@ jobs:
           if not root_file.exists():
               raise SystemExit("ERROR: Root Gradle file not found")
 
-          # Set app Compile SDK to 36
+          # Configure app Compile SDK
           app = app_file.read_text()
 
           app, count = re.subn(
@@ -63,71 +63,82 @@ jobs:
           )
 
           if count == 0:
-              raise SystemExit(
-                  "ERROR: Could not find compileSdk in app Gradle file"
-              )
+              raise SystemExit("ERROR: compileSdk not found in app Gradle file")
 
           app_file.write_text(app)
 
-          # Remove previous SDK override blocks
-          root = root_file.read_text()
+          # Rebuild root Gradle file using valid Kotlin DSL
+          root = """allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
 
-          root = re.sub(
-              r'(?s)\n// Configure all Android modules to use Compile SDK 36.*',
-              '',
-              root
-          )
+          val newBuildDir: Directory =
+              rootProject.layout.buildDirectory.dir("../../build").get()
 
-          # Apply SDK 36 after every Android module has been evaluated.
-          # Reflection avoids requiring AGP classes on the root script classpath.
-          config = """
+          rootProject.layout.buildDirectory.value(newBuildDir)
 
-          // Force every Android module to use Compile SDK 36
-          gradle.projectsEvaluated {
-              rootProject.allprojects { project ->
-                  def androidExtension = project.extensions.findByName("android")
+          subprojects {
+              val newSubprojectBuildDir: Directory =
+                  newBuildDir.dir(project.name)
+
+              project.layout.buildDirectory.value(newSubprojectBuildDir)
+          }
+
+          subprojects {
+              project.evaluationDependsOn(":app")
+          }
+
+          // Configure Android library modules after evaluation
+          subprojects {
+              afterEvaluate {
+                  val androidExtension =
+                      extensions.findByName("android")
 
                   if (androidExtension != null) {
-                      def compileSdkSetter = androidExtension.class.methods.find {
-                          it.name == "setCompileSdk" &&
-                          it.parameterCount == 1 &&
-                          (it.parameterTypes[0] == Integer.TYPE ||
-                           it.parameterTypes[0] == Integer.class)
-                      }
+                      val setter =
+                          androidExtension.javaClass.methods.firstOrNull {
+                              it.name == "setCompileSdk" &&
+                              it.parameterCount == 1
+                          }
 
-                      if (compileSdkSetter == null) {
-                          throw new GradleException(
-                              "Cannot set Compile SDK 36 for " + project.path
+                      if (setter == null) {
+                          throw GradleException(
+                              "Cannot configure Compile SDK 36 for $path"
                           )
                       }
 
-                      compileSdkSetter.invoke(androidExtension, 36)
+                      setter.invoke(androidExtension, 36)
 
                       println(
-                          "MAFIX SDK FIX: " + project.path +
-                          " configured with Compile SDK 36"
+                          "MAFIX SDK FIX: $path uses Compile SDK 36"
                       )
                   }
               }
           }
+
+          tasks.register<Delete>("clean") {
+              delete(rootProject.layout.buildDirectory)
+          }
           """
 
-          root += config
           root_file.write_text(root)
 
-          print("SUCCESS: App Compile SDK set to 36")
-          print("SUCCESS: Global Android module SDK override added")
+          print("SUCCESS: App Compile SDK configured to 36")
+          print("SUCCESS: Root Gradle Kotlin DSL configured")
           PY
 
-      - name: Verify Android SDK configuration
+      - name: Verify SDK configuration
         run: |
-          echo "Checking app Compile SDK..."
+          echo "App SDK:"
           grep -n "compileSdk" android/app/build.gradle.kts
 
-          echo "Checking global SDK override..."
-          grep -n "Force every Android module" android/build.gradle.kts
+          echo "Root Gradle SDK configuration:"
+          grep -n "MAFIX SDK FIX" android/build.gradle.kts
 
-      - name: Add Android Internet permission
+      - name: Add Internet permission
         run: |
           python3 - <<'PY'
           from pathlib import Path
