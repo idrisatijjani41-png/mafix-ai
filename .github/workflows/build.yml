@@ -35,6 +35,7 @@ jobs:
         shell: bash
         run: |
           set -e
+
           SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort | tail -n 1)
 
           if [ -z "$SDKMANAGER" ]; then
@@ -42,7 +43,11 @@ jobs:
             exit 1
           fi
 
+          echo "Using SDK manager: $SDKMANAGER"
+
+          set +o pipefail
           yes | "$SDKMANAGER" --licenses
+          set -o pipefail
 
           "$SDKMANAGER" --install \
             "platform-tools" \
