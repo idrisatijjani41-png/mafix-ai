@@ -36,109 +36,106 @@ jobs:
       - name: Generate Android project files
         run: flutter create --platforms=android .
 
-      - name: Configure Android SDK 36
+      - name: Install Android SDK 36
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Configure App Compile SDK
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import re
 
-          app_file = Path("android/app/build.gradle.kts")
-          root_file = Path("android/build.gradle.kts")
+          gradle = Path("android/app/build.gradle.kts")
 
-          if not app_file.exists():
+          if not gradle.exists():
               raise SystemExit("ERROR: App Gradle file not found")
 
-          if not root_file.exists():
-              raise SystemExit("ERROR: Root Gradle file not found")
+          content = gradle.read_text()
 
-          # Configure app Compile SDK
-          app = app_file.read_text()
-
-          app, count = re.subn(
+          content, count = re.subn(
               r'(?m)^(\s*)compileSdk\s*=.*$',
               r'\g<1>compileSdk = 36',
-              app,
+              content,
               count=1
           )
 
           if count == 0:
-              raise SystemExit("ERROR: compileSdk not found in app Gradle file")
+              raise SystemExit("ERROR: compileSdk setting not found")
 
-          app_file.write_text(app)
-
-          # Rebuild root Gradle file using valid Kotlin DSL
-          root = """allprojects {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
-
-          val newBuildDir: Directory =
-              rootProject.layout.buildDirectory.dir("../../build").get()
-
-          rootProject.layout.buildDirectory.value(newBuildDir)
-
-          subprojects {
-              val newSubprojectBuildDir: Directory =
-                  newBuildDir.dir(project.name)
-
-              project.layout.buildDirectory.value(newSubprojectBuildDir)
-          }
-
-          subprojects {
-              project.evaluationDependsOn(":app")
-          }
-
-          // Configure Android library modules after evaluation
-          subprojects {
-              afterEvaluate {
-                  val androidExtension =
-                      extensions.findByName("android")
-
-                  if (androidExtension != null) {
-                      val setter =
-                          androidExtension.javaClass.methods.firstOrNull {
-                              it.name == "setCompileSdk" &&
-                              it.parameterCount == 1
-                          }
-
-                      if (setter == null) {
-                          throw GradleException(
-                              "Cannot configure Compile SDK 36 for $path"
-                          )
-                      }
-
-                      setter.invoke(androidExtension, 36)
-
-                      println(
-                          "MAFIX SDK FIX: $path uses Compile SDK 36"
-                      )
-                  }
-              }
-          }
-
-          tasks.register<Delete>("clean") {
-              delete(rootProject.layout.buildDirectory)
-          }
-          """
-
-          root_file.write_text(root)
-
-          print("SUCCESS: App Compile SDK configured to 36")
-          print("SUCCESS: Root Gradle Kotlin DSL configured")
+          gradle.write_text(content)
+          print("SUCCESS: App Compile SDK set to 36")
           PY
 
-      - name: Verify SDK configuration
-        run: |
-          echo "App SDK:"
-          grep -n "compileSdk" android/app/build.gradle.kts
+      - name: Get Flutter dependencies
+        run: flutter pub get
 
-          echo "Root Gradle SDK configuration:"
-          grep -n "MAFIX SDK FIX" android/build.gradle.kts
+      - name: Fix file_picker Compile SDK
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          pub_cache = Path.home() / ".pub-cache/hosted/pub.dev"
+
+          matches = list(pub_cache.glob(
+              "file_picker-*/android/build.gradle"
+          )) + list(pub_cache.glob(
+              "file_picker-*/android/build.gradle.kts"
+          ))
+
+          if not matches:
+              raise SystemExit(
+                  "ERROR: file_picker Android Gradle file not found"
+              )
+
+          for gradle in matches:
+              content = gradle.read_text()
+
+              patterns = [
+                  (
+                      r'(?m)^(\s*)compileSdkVersion\s+\d+',
+                      r'\g<1>compileSdkVersion 36'
+                  ),
+                  (
+                      r'(?m)^(\s*)compileSdk\s*=\s*\d+',
+                      r'\g<1>compileSdk = 36'
+                  ),
+                  (
+                      r'(?m)^(\s*)compileSdk\s+\d+',
+                      r'\g<1>compileSdk 36'
+                  )
+              ]
+
+              changed = False
+
+              for pattern, replacement in patterns:
+                  content, count = re.subn(
+                      pattern,
+                      replacement,
+                      content,
+                      count=1
+                  )
+
+                  if count:
+                      changed = True
+                      break
+
+              if not changed:
+                  raise SystemExit(
+                      f"ERROR: Could not update Compile SDK in {gradle}"
+                  )
+
+              gradle.write_text(content)
+
+              print(f"SUCCESS: Updated {gradle} to SDK 36")
+          PY
 
       - name: Add Internet permission
+        shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -167,12 +164,18 @@ jobs:
               )
 
           manifest.write_text(content)
-
           print("SUCCESS: Internet permission configured")
           PY
 
-      - name: Get Flutter dependencies
-        run: flutter pub get
+      - name: Verify Android configuration
+        run: |
+          echo "App Compile SDK:"
+          grep -n "compileSdk" android/app/build.gradle.kts
+
+          echo "file_picker Compile SDK:"
+          find "$HOME/.pub-cache/hosted/pub.dev" \
+            -path "*/file_picker-*/android/build.gradle*" \
+            -type f -exec grep -n "compileSdk" {} \;
 
       - name: Build release APK
         env:
