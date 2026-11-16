@@ -1,210 +1,225 @@
 name: Build Mafix AI APK
 
 on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
+workflow_dispatch:
+push:
+branches:
+- main
 
 permissions:
-  contents: read
+contents: read
 
 jobs:
-  build-android:
-    name: Build Android APK
-    runs-on: ubuntu-latest
+build-android:
+name: Build Android APK
+runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
+steps:
+  - name: Checkout source code
+    uses: actions/checkout@v4
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
+  - name: Set up Java
+    uses: actions/setup-java@v4
+    with:
+      distribution: temurin
+      java-version: '17'
 
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
+  - name: Set up Flutter
+    uses: subosito/flutter-action@v2
+    with:
+      channel: stable
+      cache: true
 
-      - name: Check Flutter
-        run: flutter --version
+  - name: Check Flutter
+    run: flutter --version
 
-      - name: Generate Android project files
-        run: flutter create --platforms=android .
+  - name: Generate Android project files
+    run: flutter create --platforms=android .
 
-      - name: Install Android SDK 36
-        run: |
-          yes | sdkmanager --licenses
-          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+  - name: Set up Android SDK tools
+    uses: android-actions/setup-android@v3
 
-      - name: Configure App Compile SDK
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
+  - name: Install Android SDK 36
+    shell: bash
+    run: |
+      SDKMANAGER=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}" \
+        -name sdkmanager -type f 2>/dev/null | head -n 1)
 
-          gradle = Path("android/app/build.gradle.kts")
+      if [ -z "$SDKMANAGER" ]; then
+        echo "ERROR: sdkmanager was not found"
+        echo "ANDROID_HOME=${ANDROID_HOME:-not set}"
+        exit 1
+      fi
 
-          if not gradle.exists():
-              raise SystemExit("ERROR: App Gradle file not found")
+      chmod +x "$SDKMANAGER"
 
+      yes | "$SDKMANAGER" --licenses || true
+
+      "$SDKMANAGER" \
+        "platforms;android-36" \
+        "build-tools;36.0.0"
+
+  - name: Configure App Compile SDK
+    shell: bash
+    run: |
+      python3 - <<'PY'
+      from pathlib import Path
+      import re
+
+      gradle = Path("android/app/build.gradle.kts")
+
+      if not gradle.exists():
+          raise SystemExit("ERROR: App Gradle file not found")
+
+      content = gradle.read_text()
+
+      content, count = re.subn(
+          r'(?m)^(\s*)compileSdk\s*=.*$',
+          r'\g<1>compileSdk = 36',
+          content,
+          count=1
+      )
+
+      if count == 0:
+          raise SystemExit("ERROR: compileSdk setting not found")
+
+      gradle.write_text(content)
+      print("SUCCESS: App Compile SDK set to 36")
+      PY
+
+  - name: Get Flutter dependencies
+    run: flutter pub get
+
+  - name: Fix file_picker Compile SDK
+    shell: bash
+    run: |
+      python3 - <<'PY'
+      from pathlib import Path
+      import re
+
+      pub_cache = Path.home() / ".pub-cache/hosted/pub.dev"
+
+      matches = list(pub_cache.glob(
+          "file_picker-*/android/build.gradle"
+      )) + list(pub_cache.glob(
+          "file_picker-*/android/build.gradle.kts"
+      ))
+
+      if not matches:
+          raise SystemExit("ERROR: file_picker Gradle file not found")
+
+      for gradle in matches:
           content = gradle.read_text()
 
-          content, count = re.subn(
-              r'(?m)^(\s*)compileSdk\s*=.*$',
-              r'\g<1>compileSdk = 36',
-              content,
-              count=1
-          )
-
-          if count == 0:
-              raise SystemExit("ERROR: compileSdk setting not found")
-
-          gradle.write_text(content)
-          print("SUCCESS: App Compile SDK set to 36")
-          PY
-
-      - name: Get Flutter dependencies
-        run: flutter pub get
-
-      - name: Fix file_picker Compile SDK
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          pub_cache = Path.home() / ".pub-cache/hosted/pub.dev"
-
-          matches = list(pub_cache.glob(
-              "file_picker-*/android/build.gradle"
-          )) + list(pub_cache.glob(
-              "file_picker-*/android/build.gradle.kts"
-          ))
-
-          if not matches:
-              raise SystemExit(
-                  "ERROR: file_picker Android Gradle file not found"
+          patterns = [
+              (
+                  r'(?m)^(\s*)compileSdkVersion\s+.*$',
+                  r'\g<1>compileSdkVersion 36'
+              ),
+              (
+                  r'(?m)^(\s*)compileSdk\s*=\s*.*$',
+                  r'\g<1>compileSdk = 36'
+              ),
+              (
+                  r'(?m)^(\s*)compileSdk\s+.*$',
+                  r'\g<1>compileSdk 36'
               )
+          ]
 
-          for gradle in matches:
-              content = gradle.read_text()
+          changed = False
 
-              patterns = [
-                  (
-                      r'(?m)^(\s*)compileSdkVersion\s+\d+',
-                      r'\g<1>compileSdkVersion 36'
-                  ),
-                  (
-                      r'(?m)^(\s*)compileSdk\s*=\s*\d+',
-                      r'\g<1>compileSdk = 36'
-                  ),
-                  (
-                      r'(?m)^(\s*)compileSdk\s+\d+',
-                      r'\g<1>compileSdk 36'
-                  )
-              ]
-
-              changed = False
-
-              for pattern, replacement in patterns:
-                  content, count = re.subn(
-                      pattern,
-                      replacement,
-                      content,
-                      count=1
-                  )
-
-                  if count:
-                      changed = True
-                      break
-
-              if not changed:
-                  raise SystemExit(
-                      f"ERROR: Could not update Compile SDK in {gradle}"
-                  )
-
-              gradle.write_text(content)
-
-              print(f"SUCCESS: Updated {gradle} to SDK 36")
-          PY
-
-      - name: Add Internet permission
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          manifest = Path(
-              "android/app/src/main/AndroidManifest.xml"
-          )
-
-          if not manifest.exists():
-              raise SystemExit("ERROR: AndroidManifest.xml not found")
-
-          content = manifest.read_text()
-
-          permission = (
-              '<uses-permission '
-              'android:name="android.permission.INTERNET"/>'
-          )
-
-          if "android.permission.INTERNET" not in content:
-              content = re.sub(
-                  r'(<manifest\b[^>]*>)',
-                  r'\1\n    ' + permission,
+          for pattern, replacement in patterns:
+              content, count = re.subn(
+                  pattern,
+                  replacement,
                   content,
                   count=1
               )
 
-          manifest.write_text(content)
-          print("SUCCESS: Internet permission configured")
-          PY
+              if count:
+                  changed = True
+                  break
 
-      - name: Verify Android configuration
-        run: |
-          echo "App Compile SDK:"
-          grep -n "compileSdk" android/app/build.gradle.kts
+          if not changed:
+              raise SystemExit(
+                  f"ERROR: Could not update Compile SDK in {gradle}"
+              )
 
-          echo "file_picker Compile SDK:"
-          find "$HOME/.pub-cache/hosted/pub.dev" \
-            -path "*/file_picker-*/android/build.gradle*" \
-            -type f -exec grep -n "compileSdk" {} \;
+          gradle.write_text(content)
+          print(f"SUCCESS: Updated {gradle} to SDK 36")
+      PY
 
-      - name: Build release APK
-        env:
-          MAFIX_LIVE_TOKEN: ${{ secrets.LIVE_AUTH_TOKEN }}
-        run: |
-          if [ -z "$MAFIX_LIVE_TOKEN" ]; then
-            echo "ERROR: LIVE_AUTH_TOKEN secret is missing."
-            exit 1
-          fi
+  - name: Add Internet permission
+    shell: bash
+    run: |
+      python3 - <<'PY'
+      from pathlib import Path
+      import re
 
-          flutter build apk --release \
-            --dart-define=MAFIX_LIVE_TOKEN="$MAFIX_LIVE_TOKEN"
+      manifest = Path(
+          "android/app/src/main/AndroidManifest.xml"
+      )
 
-      - name: Verify APK
-        run: |
-          APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
+      if not manifest.exists():
+          raise SystemExit("ERROR: AndroidManifest.xml not found")
 
-          if [ ! -f "$APK_PATH" ]; then
-            echo "ERROR: APK was not generated."
-            exit 1
-          fi
+      content = manifest.read_text()
 
-          echo "SUCCESS: Mafix AI APK generated."
-          ls -lh "$APK_PATH"
+      permission = (
+          '<uses-permission '
+          'android:name="android.permission.INTERNET"/>'
+      )
 
-      - name: Upload Mafix AI APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: Mafix-AI-Android-APK
-          path: build/app/outputs/flutter-apk/app-release.apk
-          if-no-files-found: error
-          retention-days: 7
+      if "android.permission.INTERNET" not in content:
+          content = re.sub(
+              r'(<manifest\b[^>]*>)',
+              r'\1\n    ' + permission,
+              content,
+              count=1
+          )
+
+      manifest.write_text(content)
+      print("SUCCESS: Internet permission configured")
+      PY
+
+  - name: Verify Android configuration
+    run: |
+      echo "App Compile SDK:"
+      grep -n "compileSdk" android/app/build.gradle.kts
+
+      echo "file_picker Compile SDK:"
+      find "$HOME/.pub-cache/hosted/pub.dev" \
+        -path "*/file_picker-*/android/build.gradle*" \
+        -type f -exec grep -n "compileSdk" {} \;
+
+  - name: Build release APK
+    env:
+      MAFIX_LIVE_TOKEN: ${{ secrets.LIVE_AUTH_TOKEN }}
+    run: |
+      if [ -z "$MAFIX_LIVE_TOKEN" ]; then
+        echo "ERROR: LIVE_AUTH_TOKEN secret is missing."
+        exit 1
+      fi
+
+      flutter build apk --release \
+        --dart-define=MAFIX_LIVE_TOKEN="$MAFIX_LIVE_TOKEN"
+
+  - name: Verify APK
+    run: |
+      APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
+
+      if [ ! -f "$APK_PATH" ]; then
+        echo "ERROR: APK was not generated."
+        exit 1
+      fi
+
+      echo "SUCCESS: Mafix AI APK generated."
+      ls -lh "$APK_PATH"
+
+  - name: Upload Mafix AI APK
+    uses: actions/upload-artifact@v4
+    with:
+      name: Mafix-AI-Android-APK
+      path: build/app/outputs/flutter-apk/app-release.apk
+      if-no-files-found: error
+      retention-days: 7
