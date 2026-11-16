@@ -36,36 +36,72 @@ jobs:
       - name: Generate Android project files
         run: flutter create --platforms=android .
 
-      - name: Set Android Compile SDK 36
+      - name: Configure Android Compile SDK 36
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import re
 
-          file = Path("android/app/build.gradle.kts")
+          app_file = Path("android/app/build.gradle.kts")
+          root_file = Path("android/build.gradle.kts")
 
-          if not file.exists():
-              raise SystemExit("ERROR: build.gradle.kts not found")
+          if not app_file.exists():
+              raise SystemExit("ERROR: App Gradle file not found")
 
-          content = file.read_text()
+          if not root_file.exists():
+              raise SystemExit("ERROR: Root Gradle file not found")
 
-          updated, count = re.subn(
+          # Set application compileSdk to 36
+          app = app_file.read_text()
+
+          app, count = re.subn(
               r'(?m)^(\s*)compileSdk\s*=.*$',
               r'\g<1>compileSdk = 36',
-              content,
+              app,
               count=1
           )
 
           if count == 0:
-              raise SystemExit("ERROR: compileSdk setting not found")
+              raise SystemExit("ERROR: App compileSdk setting not found")
 
-          file.write_text(updated)
+          app_file.write_text(app)
 
-          if not re.search(r'(?m)^\s*compileSdk\s*=\s*36\s*$', updated):
-              raise SystemExit("ERROR: compileSdk 36 verification failed")
+          # Configure all Android application and library modules
+          root = root_file.read_text()
 
-          print("SUCCESS: compileSdk is set to 36")
+          config = """
+          subprojects {
+              plugins.withId("com.android.application") {
+                  extensions.configure<com.android.build.api.dsl.ApplicationExtension> {
+                      compileSdk = 36
+                  }
+              }
+
+              plugins.withId("com.android.library") {
+                  extensions.configure<com.android.build.api.dsl.LibraryExtension> {
+                      compileSdk = 36
+                  }
+              }
+          }
+          """
+
+          if "Configure all Android modules to use Compile SDK 36" not in root:
+              root += """
+          
+          // Configure all Android modules to use Compile SDK 36
+          """ + config
+
+          root_file.write_text(root)
+
+          print("SUCCESS: App compileSdk set to 36")
+          print("SUCCESS: Android library modules configured for SDK 36")
           PY
+
+      - name: Verify Android Compile SDK
+        run: |
+          echo "Checking Android SDK configuration..."
+          grep -n "compileSdk" android/app/build.gradle.kts
+          grep -n "compileSdk = 36" android/build.gradle.kts
 
       - name: Add Android internet permission
         run: |
@@ -74,6 +110,10 @@ jobs:
           import re
 
           manifest = Path("android/app/src/main/AndroidManifest.xml")
+
+          if not manifest.exists():
+              raise SystemExit("ERROR: AndroidManifest.xml not found")
+
           content = manifest.read_text()
 
           permission = '<uses-permission android:name="android.permission.INTERNET"/>'
@@ -87,7 +127,7 @@ jobs:
               )
 
           manifest.write_text(content)
-          print("Internet permission is present.")
+          print("SUCCESS: Internet permission is present.")
           PY
 
       - name: Get dependencies
@@ -102,7 +142,18 @@ jobs:
             exit 1
           fi
 
-          flutter build apk --release --dart-define=MAFIX_LIVE_TOKEN="$MAFIX_LIVE_TOKEN"
+          flutter build apk --release \
+            --dart-define=MAFIX_LIVE_TOKEN="$MAFIX_LIVE_TOKEN"
+
+      - name: Verify APK
+        run: |
+          if [ ! -f build/app/outputs/flutter-apk/app-release.apk ]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          echo "SUCCESS: Mafix AI APK generated."
+          ls -lh build/app/outputs/flutter-apk/app-release.apk
 
       - name: Upload Mafix AI APK
         uses: actions/upload-artifact@v4
