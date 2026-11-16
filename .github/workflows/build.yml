@@ -29,12 +29,16 @@ jobs:
       - name: Create Android platform
         run: flutter create --platforms=android .
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Android SDK 36
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
         run: |
-          sdkmanager --install \
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort | tail -n 1)
+
+          yes | "$SDKMANAGER" --licenses
+
+          "$SDKMANAGER" --install \
+            "platform-tools" \
             "platforms;android-36" \
             "build-tools;36.0.0"
 
@@ -46,11 +50,13 @@ jobs:
 
           gradle = Path("android/app/build.gradle.kts")
           content = gradle.read_text()
+
           content = re.sub(
-              r'compileSdk\s*=\s*\d+',
-              'compileSdk = 36',
+              r'(?m)^(\s*compileSdk\s*=\s*).+$',
+              r'\g<1>36',
               content
           )
+
           gradle.write_text(content)
           PY
 
@@ -63,35 +69,32 @@ jobs:
           from pathlib import Path
           import re
 
-          paths = list(
-              Path.home().glob(
-                  ".pub-cache/hosted/pub.dev/file_picker-*/android/build.gradle"
-              )
+          paths = Path.home().glob(
+              ".pub-cache/hosted/pub.dev/file_picker-*/android/build.gradle"
           )
 
           for path in paths:
               content = path.read_text()
+
               content = re.sub(
-                  r'compileSdkVersion\s+\d+',
-                  'compileSdkVersion 36',
+                  r'(?m)^(\s*compileSdkVersion\s+).+$',
+                  r'\g<1>36',
                   content
               )
+
               content = re.sub(
-                  r'compileSdk\s*=\s*\d+',
-                  'compileSdk = 36',
+                  r'(?m)^(\s*compileSdk\s*=\s*).+$',
+                  r'\g<1>36',
                   content
               )
-              content = re.sub(
-                  r'compileSdk\s+\d+',
-                  'compileSdk 36',
-                  content
-              )
+
               path.write_text(content)
           PY
 
       - name: Add Internet permission
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
+
           if ! grep -q 'android.permission.INTERNET' "$MANIFEST"; then
             sed -i '/<manifest/a\
             <uses-permission android:name="android.permission.INTERNET"/>' "$MANIFEST"
