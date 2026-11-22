@@ -93,10 +93,11 @@ class LiveVoiceService extends ChangeNotifier {
             details.add('reason: ${reason.trim()}');
           }
 
-          lastError = details.isEmpty
-              ? 'Live server closed the WebSocket connection without sending a close code or reason.'
-              : 'Live server closed the WebSocket connection (${details.join(', ')}).';
-
+          if (lastError == null || lastError!.isEmpty) {
+  lastError = details.isEmpty
+      ? 'Live server closed the WebSocket connection without sending a close code or reason.'
+      : 'Live server closed the WebSocket connection (${details.join(', ')}).';
+          }
           _setStatus(LiveStatus.error);
         },
 
