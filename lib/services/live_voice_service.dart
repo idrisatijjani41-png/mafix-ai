@@ -93,11 +93,13 @@ class LiveVoiceService extends ChangeNotifier {
             details.add('reason: ${reason.trim()}');
           }
 
+          // Preserve the original WebSocket error if one was received.
           if (lastError == null || lastError!.isEmpty) {
-  lastError = details.isEmpty
-      ? 'Live server closed the WebSocket connection without sending a close code or reason.'
-      : 'Live server closed the WebSocket connection (${details.join(', ')}).';
+            lastError = details.isEmpty
+                ? 'Live server closed the WebSocket connection without sending a close code or reason.'
+                : 'Live server closed the WebSocket connection (${details.join(', ')}).';
           }
+
           _setStatus(LiveStatus.error);
         },
 
@@ -145,10 +147,23 @@ class LiveVoiceService extends ChangeNotifier {
   }
 
   void _onMessage(dynamic raw) {
-    if (_disposed || raw is! String) return;
+    if (_disposed) return;
 
     try {
-      final data = jsonDecode(raw) as Map<String, dynamic>;
+      // Accept both String and byte-based WebSocket messages.
+      final messageText = raw is String
+          ? raw
+          : raw is List<int>
+              ? utf8.decode(raw)
+              : null;
+
+      if (messageText == null) return;
+
+      final decoded = jsonDecode(messageText);
+
+      if (decoded is! Map<String, dynamic>) return;
+
+      final data = decoded;
 
       if (data['setupComplete'] != null) {
         _setupComplete = true;
@@ -156,8 +171,14 @@ class LiveVoiceService extends ChangeNotifier {
         return;
       }
 
-      if (data['error'] != null) {
-        lastError = 'Live server error: ${data['error']}';
+      // Handle different server error message formats.
+      if (data['error'] != null ||
+          data['type'] == 'error' ||
+          data['type'] == 'serverError') {
+        final serverError =
+            data['error'] ?? data['message'] ?? data;
+
+        lastError = 'Live server error: $serverError';
         _setupComplete = false;
         _setStatus(LiveStatus.error);
         return;
