@@ -121,7 +121,7 @@ try {
   );
 
   // Wait for Gemini setupComplete before sending microphone audio.
-  for (var i = 0; i < 150; i++) {
+  for (var i = 0; i < 300; i++) {
     if (_live.status == LiveStatus.listening ||
         _live.status == LiveStatus.speaking) {
       break;
