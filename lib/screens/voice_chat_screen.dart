@@ -182,6 +182,7 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
     }
   }
 
+  /// Android microphone with voice communication and echo cancellation.
   Future<void> _startMicrophone() async {
     if (_micMuted || _micSubscription != null) return;
 
@@ -190,9 +191,17 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
         encoder: AudioEncoder.pcm16bits,
         sampleRate: LiveConfig.inputSampleRate,
         numChannels: 1,
+
         autoGain: true,
         echoCancel: true,
         noiseSuppress: true,
+
+        androidConfig: AndroidRecordConfig(
+          audioSource: AndroidAudioSource.voiceCommunication,
+          audioManagerMode: AudioManagerMode.modeInCommunication,
+          speakerphone: true,
+          manageBluetooth: false,
+        ),
       ),
     );
 
@@ -242,7 +251,6 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
     try {
       if (!_playerReady) return;
 
-      // Wait for previously queued audio.
       await _playbackQueue;
 
       await _player.stopPlayer();
