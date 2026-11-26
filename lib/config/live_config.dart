@@ -2,7 +2,7 @@ class LiveConfig {
   LiveConfig._();
 
   static const String workerBaseUrl =
-      'https://mafix-ai-backend.idrisatijjani9.workers.dev';
+    'https://272092a1-mafix-ai-backend.idrisatijjani9.workers.dev';
   static const String authToken = String.fromEnvironment('MAFIX_LIVE_TOKEN');
   static const String model = 'models/gemini-3.8-live';
 
