@@ -27,15 +27,17 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
 
   StreamSubscription<Uint8List>? _micSubscription;
 
+  // Audio playback queue.
+  Future<void> _playbackQueue = Future<void>.value();
+
   bool _playerReady = false;
+  bool _playerInitializing = false;
   bool _micMuted = false;
   bool _starting = false;
   bool _showText = false;
 
-  // TEMPORARY DIAGNOSTIC MODE.
-  // true = receive AI responses but do not play audio.
-  // false = enable normal audio playback.
-  static const bool _diagnosticDisableAudioPlayback = true;
+  // Audio playback is ENABLED.
+  static const bool _diagnosticDisableAudioPlayback = false;
 
   String _language = 'auto';
   String _voice = 'Aoede';
@@ -72,10 +74,17 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
 
   void _onLiveChanged() {
     if (!mounted) return;
-    setState(() => _error = _live.lastError);
+
+    setState(() {
+      _error = _live.lastError;
+    });
   }
 
   Future<void> _initPlayer() async {
+    if (_playerReady || _playerInitializing) return;
+
+    _playerInitializing = true;
+
     try {
       await _player.openPlayer();
 
@@ -88,12 +97,18 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
       );
 
       _playerReady = true;
+
+      debugPrint('Mafix audio player initialized.');
     } catch (e) {
+      debugPrint('Mafix audio player initialization error: $e');
+
       if (mounted) {
         setState(() {
           _error = 'Audio playback setup failed: $e';
         });
       }
+    } finally {
+      _playerInitializing = false;
     }
   }
 
@@ -149,14 +164,20 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
 
       await _startMicrophone();
     } catch (e) {
+      debugPrint('Mafix Live start error: $e');
+
       if (mounted) {
-        setState(() => _error = e.toString());
+        setState(() {
+          _error = e.toString();
+        });
       }
 
       await _live.disconnect();
     } finally {
       if (mounted) {
-        setState(() => _starting = false);
+        setState(() {
+          _starting = false;
+        });
       }
     }
   }
@@ -182,6 +203,8 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
         }
       },
       onError: (Object e) {
+        debugPrint('Mafix microphone error: $e');
+
         if (mounted) {
           setState(() {
             _error = 'Microphone stream error: $e';
@@ -191,54 +214,76 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
     );
   }
 
+  /// Receives Gemini PCM16 audio chunks and plays them sequentially.
   void _playChunk(Uint8List chunk) {
-    if (!_playerReady) return;
+    if (!_playerReady || _diagnosticDisableAudioPlayback) return;
 
-    // TEMPORARY TEST:
-    // Skip native audio playback to check whether it causes app exit.
+    if (chunk.isEmpty) return;
+
+    _playbackQueue = _playbackQueue.then((_) async {
+      if (!_playerReady || !mounted) return;
+
+      await _player.feedUint8FromStream(chunk);
+    }).catchError((Object error) {
+      debugPrint('Mafix audio playback error: $error');
+
+      if (mounted) {
+        setState(() {
+          _error = 'Audio playback error: $error';
+        });
+      }
+    });
+  }
+
+  /// Stops and restarts playback when the user interrupts Gemini.
+  Future<void> _stopPlaybackForBargeIn() async {
     if (_diagnosticDisableAudioPlayback) return;
 
     try {
-      _player.feedFromStream(chunk);
+      if (!_playerReady) return;
+
+      // Wait for previously queued audio.
+      await _playbackQueue;
+
+      await _player.stopPlayer();
+
+      await _player.startPlayerFromStream(
+        codec: Codec.pcm16,
+        sampleRate: LiveConfig.outputSampleRate,
+        numChannels: 1,
+        bufferSize: 8192,
+        interleaved: true,
+      );
+
+      debugPrint('Mafix audio playback restarted.');
     } catch (e) {
+      debugPrint('Mafix playback restart error: $e');
+
       if (mounted) {
         setState(() {
-          _error = 'Audio playback error: $e';
+          _error = 'Audio restart error: $e';
         });
       }
     }
   }
 
-  Future<void> _stopPlaybackForBargeIn() async {
-    // Do not touch the native player during diagnostic testing.
-    if (_diagnosticDisableAudioPlayback) return;
-
-    try {
-      if (_playerReady) {
-        await _player.stopPlayer();
-
-        await _player.startPlayerFromStream(
-          codec: Codec.pcm16,
-          sampleRate: LiveConfig.outputSampleRate,
-          numChannels: 1,
-          bufferSize: 8192,
-          interleaved: true,
-        );
-      }
-    } catch (_) {}
-  }
-
   Future<void> _toggleMute() async {
     if (_micMuted) {
-      setState(() => _micMuted = false);
+      setState(() {
+        _micMuted = false;
+      });
+
       await _startMicrophone();
     } else {
-      setState(() => _micMuted = true);
+      setState(() {
+        _micMuted = true;
+      });
 
       await _micSubscription?.cancel();
       _micSubscription = null;
 
       await _recorder.stop();
+
       _live.sendAudioStreamEnd();
     }
   }
@@ -255,9 +300,12 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
 
     try {
       if (_playerReady) {
+        await _playbackQueue;
         await _player.stopPlayer();
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Mafix player stop error: $e');
+    }
 
     if (pop && mounted) {
       Navigator.of(context).pop();
@@ -271,6 +319,7 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
 
     _live.sendText(text);
     _textController.clear();
+
     FocusScope.of(context).unfocus();
   }
 
@@ -278,14 +327,19 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
     switch (_live.status) {
       case LiveStatus.connecting:
         return 'Connecting to Mafix AI...';
+
       case LiveStatus.listening:
         return 'Mafix AI is listening';
+
       case LiveStatus.thinking:
         return 'Mafix AI is thinking...';
+
       case LiveStatus.speaking:
         return 'Mafix AI is speaking';
+
       case LiveStatus.error:
         return 'Connection error';
+
       case LiveStatus.disconnected:
         return 'Tap the microphone to start';
     }
@@ -370,6 +424,7 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                 ],
               ),
             ),
+
             Expanded(
               child: Center(
                 child: SingleChildScrollView(
@@ -378,11 +433,14 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       const SizedBox(height: 14),
+
                       MafixLiveOrb(
                         active: active,
                         color: _statusColor,
                       ),
+
                       const SizedBox(height: 12),
+
                       Text(
                         _statusLabel,
                         style: TextStyle(
@@ -391,7 +449,9 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                           fontWeight: FontWeight.w600,
                         ),
                       ),
+
                       const SizedBox(height: 8),
+
                       Text(
                         active
                             ? 'Speak naturally. You can interrupt Mafix AI.'
@@ -402,7 +462,9 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                           fontSize: 12,
                         ),
                       ),
+
                       const SizedBox(height: 26),
+
                       if (_userText.isNotEmpty || _aiText.isNotEmpty)
                         Container(
                           width: double.infinity,
@@ -426,7 +488,9 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
+
                                 const SizedBox(height: 5),
+
                                 Text(
                                   _userText,
                                   style: const TextStyle(
@@ -435,8 +499,10 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                                   ),
                                 ),
                               ],
+
                               if (_aiText.isNotEmpty) ...[
                                 const SizedBox(height: 14),
+
                                 const Text(
                                   'MAFIX AI',
                                   style: TextStyle(
@@ -445,7 +511,9 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
+
                                 const SizedBox(height: 5),
+
                                 Text(
                                   _aiText,
                                   style: const TextStyle(
@@ -457,8 +525,10 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                             ],
                           ),
                         ),
+
                       if (_showText) ...[
                         const SizedBox(height: 16),
+
                         TextField(
                           controller: _textController,
                           style: const TextStyle(color: Colors.white),
@@ -484,6 +554,7 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                           ),
                         ),
                       ],
+
                       if (_error != null)
                         Padding(
                           padding: const EdgeInsets.only(top: 12),
@@ -496,12 +567,14 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                             ),
                           ),
                         ),
+
                       const SizedBox(height: 28),
                     ],
                   ),
                 ),
               ),
             ),
+
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
               child: Row(
@@ -513,7 +586,9 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                     label: _micMuted ? 'Unmute' : 'Mute',
                     onTap: active ? _toggleMute : _startLive,
                   ),
+
                   const SizedBox(width: 28),
+
                   _roundButton(
                     icon: Icons.call_end_rounded,
                     color: Colors.redAccent,
@@ -521,13 +596,17 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                     onTap: () => _endSession(pop: true),
                     large: true,
                   ),
+
                   const SizedBox(width: 28),
+
                   _roundButton(
                     icon: Icons.keyboard_alt_outlined,
                     color: Colors.white70,
                     label: 'Text',
                     onTap: () {
-                      setState(() => _showText = !_showText);
+                      setState(() {
+                        _showText = !_showText;
+                      });
                     },
                   ),
                 ],
@@ -573,7 +652,9 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
             ),
           ),
         ),
+
         const SizedBox(height: 6),
+
         Text(
           label,
           style: const TextStyle(
@@ -614,11 +695,14 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                   fontWeight: FontWeight.bold,
                 ),
               ),
+
               const SizedBox(height: 18),
+
               const Text(
                 'Language preference',
                 style: TextStyle(color: Colors.white60),
               ),
+
               DropdownButton<String>(
                 value: _language,
                 isExpanded: true,
@@ -636,11 +720,14 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                   });
                 },
               ),
+
               const SizedBox(height: 12),
+
               const Text(
                 'AI voice',
                 style: TextStyle(color: Colors.white60),
               ),
+
               DropdownButton<String>(
                 value: _voice,
                 isExpanded: true,
@@ -658,7 +745,9 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                   });
                 },
               ),
+
               const SizedBox(height: 18),
+
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
@@ -666,7 +755,9 @@ class _VoiceChatScreenState extends State<VoiceChatScreen> {
                   child: const Text('Save settings'),
                 ),
               ),
+
               const SizedBox(height: 8),
+
               const Text(
                 'Voice/language changes apply to the next Live session.',
                 style: TextStyle(
