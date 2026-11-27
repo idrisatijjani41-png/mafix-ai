@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -55,7 +56,10 @@ class _ChatScreenState extends State<ChatScreen> {
   String _generationStatus = 'thinking';
   late String _selectedMode;
 
+  // Server request ID may be updated by the Worker. The local ID is kept
+  // separately so an old stream cannot modify or finish a newer request.
   String _activeRequestId = '';
+  String _activeLocalRequestId = '';
 
   http.Client? _streamClient;
 
@@ -93,12 +97,27 @@ class _ChatScreenState extends State<ChatScreen> {
     _controller.dispose();
     _scrollController.dispose();
 
-    _streamClient?.close();
+    final client = _streamClient;
+    _streamClient = null;
+    if (client != null) {
+      try {
+        client.close();
+      } catch (_) {}
+    }
 
     _speech.cancel();
     _tts.stop();
 
     super.dispose();
+  }
+
+  void _closeStreamClient(http.Client client) {
+    if (!identical(_streamClient, client)) return;
+
+    _streamClient = null;
+    try {
+      client.close();
+    } catch (_) {}
   }
 
   void _onComposerChanged() {
@@ -151,9 +170,10 @@ class _ChatScreenState extends State<ChatScreen> {
         .map((message) => {
               'text': message.text,
               'isUser': message.isUser,
-              // Store a compact preview so chat history remains lightweight.
               'imageBase64': _compactImageForHistory(message.imageBase64),
-              'imageMime': message.imageBase64 != null ? 'image/jpeg' : message.imageMime,
+              'imageMime': message.imageBase64 != null
+                  ? 'image/jpeg'
+                  : message.imageMime,
               'attachmentName': message.attachmentName,
               'attachmentMime': message.attachmentMime,
             })
@@ -476,14 +496,36 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _stopGeneration() async {
-    final id = _activeRequestId;
+    if (!_isLoading || _manuallyStopped) return;
 
     _manuallyStopped = true;
 
-    _streamClient?.close();
-    _streamClient = null;
+    final serverRequestId = _activeRequestId;
+    final localRequestId = _activeLocalRequestId;
+    final client = _streamClient;
 
-    if (id.isNotEmpty) {
+    if (mounted) {
+      setState(() {
+        _generationStatus = 'stopped';
+      });
+    }
+
+    // If Stop is pressed while the conversation is still being saved,
+    // there is not yet a stream client. Invalidate the local request so
+    // _sendMessage exits before opening a network connection.
+    if (client == null) {
+      if (_activeLocalRequestId == localRequestId) {
+        _activeLocalRequestId = '';
+        _activeRequestId = '';
+        if (mounted) {
+          setState(() => _isLoading = false);
+        }
+      }
+      return;
+    }
+
+    // Notify the Worker before closing the HTTP stream.
+    if (serverRequestId.isNotEmpty) {
       try {
         await http.post(
           Uri.parse('$_baseUrl/stop'),
@@ -491,19 +533,24 @@ class _ChatScreenState extends State<ChatScreen> {
             'Content-Type': 'application/json',
           },
           body: jsonEncode({
-            'request_id': id,
+            'request_id': serverRequestId,
           }),
         ).timeout(const Duration(seconds: 4));
       } catch (_) {}
     }
 
-    if (!mounted) return;
+    // Close only the client belonging to this request. Never close a
+    // newer request's client if the user has already started another one.
+    if (_activeLocalRequestId == localRequestId) {
+      _closeStreamClient(client);
+    }
 
-    setState(() {
-      _isLoading = false;
-      _generationStatus = 'stopped';
-      _activeRequestId = '';
-    });
+    if (mounted &&
+        _activeLocalRequestId == localRequestId) {
+      setState(() {
+        _generationStatus = 'stopped';
+      });
+    }
   }
 
   Future<void> _pickImage(ImageSource source) async {
@@ -747,7 +794,6 @@ class _ChatScreenState extends State<ChatScreen> {
     });
 
     _scrollToBottom();
-    // Persist the user's image request before waiting for the image service.
     await _saveConversation();
 
     try {
@@ -941,6 +987,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final assistantIndex = _messages.length + 1;
 
     _manuallyStopped = false;
+    _activeLocalRequestId = requestId;
+    _activeRequestId = requestId;
 
     setState(() {
       _messages.add(
@@ -971,23 +1019,27 @@ class _ChatScreenState extends State<ChatScreen> {
 
       _isLoading = true;
       _generationStatus = 'thinking';
-      _activeRequestId = requestId;
     });
 
     FocusScope.of(context).unfocus();
     _scrollToBottom();
 
-    await _saveConversation();
-
-    final client = http.Client();
-
-    _streamClient = client;
-
+    http.Client? client;
     var receivedToken = false;
     var streamCompleted = false;
+    var serverStopped = false;
+
+    bool isCurrentRequest() {
+      return mounted &&
+          _activeLocalRequestId == requestId &&
+          !_manuallyStopped;
+    }
 
     void updateAssistant(String chunk) {
-      if (!mounted || assistantIndex >= _messages.length) return;
+      if (!isCurrentRequest() ||
+          assistantIndex >= _messages.length) {
+        return;
+      }
 
       final old = _messages[assistantIndex];
 
@@ -997,11 +1049,20 @@ class _ChatScreenState extends State<ChatScreen> {
       );
 
       setState(() {});
-
       _scrollToBottom();
     }
 
     try {
+      // Stop can be pressed while history is being saved. Do not create
+      // or send a request after that local request has been cancelled.
+      await _saveConversation();
+
+      if (!mounted ||
+          _activeLocalRequestId != requestId ||
+          _manuallyStopped) {
+        return;
+      }
+
       if (attachmentAction == 'video' &&
           attachmentName != null) {
         await _sendAttachmentMessage(
@@ -1014,7 +1075,6 @@ class _ChatScreenState extends State<ChatScreen> {
           attachmentBase64,
           attachmentText,
         );
-
         return;
       }
 
@@ -1027,9 +1087,11 @@ class _ChatScreenState extends State<ChatScreen> {
           attachmentBase64,
           attachmentText,
         );
-
         return;
       }
+
+      client = http.Client();
+      _streamClient = client;
 
       final request = http.Request(
         'POST',
@@ -1057,6 +1119,8 @@ class _ChatScreenState extends State<ChatScreen> {
         const Duration(seconds: 75),
       );
 
+      if (!isCurrentRequest()) return;
+
       if (response.statusCode != 200) {
         final errorBody = await response.stream.bytesToString();
 
@@ -1075,8 +1139,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
       var buffer = '';
 
-      // FIXED SSE EVENT PARSER
       void processSseEvent(String event) {
+        if (!isCurrentRequest() || streamCompleted) return;
+
         for (final line in event.split('\n')) {
           if (!line.startsWith('data:')) continue;
 
@@ -1094,9 +1159,18 @@ class _ChatScreenState extends State<ChatScreen> {
 
           if (payload is! Map) continue;
 
+          final returnedRequestId =
+              payload['request_id'] ?? payload['requestId'];
+
+          if (returnedRequestId != null &&
+              returnedRequestId.toString().isNotEmpty &&
+              _activeLocalRequestId == requestId) {
+            _activeRequestId = returnedRequestId.toString();
+          }
+
           switch (payload['type']) {
             case 'status':
-              if (mounted) {
+              if (isCurrentRequest()) {
                 setState(() {
                   _generationStatus =
                       payload['status']?.toString() ?? 'thinking';
@@ -1114,15 +1188,14 @@ class _ChatScreenState extends State<ChatScreen> {
               break;
 
             case 'error':
+              streamCompleted = true;
               throw Exception(
                 payload['error'] ?? 'AI stream failed',
               );
 
             case 'done':
-            case 'stopped':
               streamCompleted = true;
 
-              // Handle image generation response.
               if (payload['image_base64'] != null) {
                 receivedToken = true;
 
@@ -1138,7 +1211,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     payload['image_mime_type']?.toString() ??
                     'image/png';
 
-                if (mounted &&
+                if (isCurrentRequest() &&
                     assistantIndex < _messages.length) {
                   setState(() {
                     _messages[assistantIndex] = _ChatMessage(
@@ -1148,45 +1221,59 @@ class _ChatScreenState extends State<ChatScreen> {
                       imageMime: mimeType,
                     );
                   });
-
                   _scrollToBottom();
                 }
-              } else if (payload['answer'] != null &&
+              } else if (!receivedToken &&
+                  payload['answer'] != null &&
                   payload['answer'].toString().isNotEmpty) {
                 receivedToken = true;
-
-                updateAssistant(
-                  payload['answer'].toString(),
-                );
+                updateAssistant(payload['answer'].toString());
               }
+              break;
 
+            case 'stopped':
+              streamCompleted = true;
+              serverStopped = true;
+              if (mounted && _activeLocalRequestId == requestId) {
+                setState(() {
+                  _generationStatus = 'stopped';
+                });
+              }
               break;
           }
         }
       }
 
-      // Read the server stream.
       await for (final bytes
           in response.stream.transform(utf8.decoder)) {
+        if (!isCurrentRequest()) break;
+
         buffer += bytes.replaceAll('\r\n', '\n');
 
         while (buffer.contains('\n\n')) {
+          if (!isCurrentRequest()) break;
+
           final boundary = buffer.indexOf('\n\n');
-
           final event = buffer.substring(0, boundary);
-
           buffer = buffer.substring(boundary + 2);
 
           processSseEvent(event);
+
+          if (streamCompleted || !isCurrentRequest()) break;
         }
+
+        if (streamCompleted || !isCurrentRequest()) break;
       }
 
-      // Process remaining data if stream closes without delimiter.
-      if (buffer.trim().isNotEmpty) {
+      if (isCurrentRequest() &&
+          !streamCompleted &&
+          buffer.trim().isNotEmpty) {
         processSseEvent(buffer);
       }
 
-      if (!receivedToken && !_manuallyStopped) {
+      if (isCurrentRequest() &&
+          !receivedToken &&
+          !serverStopped) {
         throw Exception(
           streamCompleted
               ? 'AI returned an empty response.'
@@ -1194,9 +1281,14 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       }
 
-      await _saveConversation();
+      if (_activeLocalRequestId == requestId) {
+        await _saveConversation();
+      }
     } catch (e) {
-      if (mounted && !_manuallyStopped && !receivedToken) {
+      if (mounted &&
+          _activeLocalRequestId == requestId &&
+          !_manuallyStopped &&
+          !receivedToken) {
         setState(() {
           if (assistantIndex < _messages.length) {
             _messages[assistantIndex] = _ChatMessage(
@@ -1207,6 +1299,7 @@ class _ChatScreenState extends State<ChatScreen> {
           }
         });
       } else if (mounted &&
+          _activeLocalRequestId == requestId &&
           !_manuallyStopped &&
           receivedToken) {
         _showSnack(
@@ -1214,20 +1307,25 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       }
     } finally {
-      client.close();
-
-      if (identical(_streamClient, client)) {
-        _streamClient = null;
+      if (client != null) {
+        _closeStreamClient(client);
       }
 
-      if (mounted) {
+      // An older request must never reset the loading state or IDs of
+      // a newer request started after the previous one was stopped.
+      if (mounted &&
+          _activeLocalRequestId == requestId) {
         setState(() {
           _isLoading = false;
           _activeRequestId = '';
+          _activeLocalRequestId = '';
+          _generationStatus =
+              (_manuallyStopped || serverStopped)
+                  ? 'stopped'
+                  : 'thinking';
         });
 
         _scrollToBottom();
-
         await _saveConversation();
       }
     }
